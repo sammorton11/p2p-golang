@@ -12,8 +12,9 @@ import (
 	"io"
 	"log"
 	mrand "math/rand"
+	"net/http"
+	_ "net/http/pprof"
 	"os"
-	"strconv"
 	"strings"
 	"sync"
 	"time"
@@ -75,10 +76,10 @@ func handleStream(s network.Stream) {
 	log.Printf("\n[👥] New peer connected: %s\n", s.Conn().RemotePeer().String()[:12])
 
 	// this is for sending and receiving data from self and peers - Read to stream; Write to stream
-	// Taking the first 12 chars instead of full ID
 	rw := bufio.NewReadWriter(bufio.NewReader(s), bufio.NewWriter(s))
 
 	// concurrency so peers can communicate at the same time
+	// Taking the first 12 chars instead of full ID
 	go readData(rw, s.Conn().RemotePeer().String()[:12])
 	go writeData(rw, s.Conn().RemotePeer().String()[:12])
 }
@@ -117,18 +118,23 @@ func readData(rw *bufio.ReadWriter, peerID string) {
 
 /*
 Automatic broadcasting:
-- Every 5 seconds
-- Takes the blockchain
-- Converts it to JSON
-- Sends it to all peers
-- This keeps everyone in sync
+  - Every 5 seconds
+  - Takes the blockchain
+  - Converts it to JSON
+  - Sends it to all peers
+  - This keeps everyone in sync
 */
 func writeData(rw *bufio.ReadWriter, peerID string) {
+	// Periodically write valid blocks -- simulating adding valid blocks from a mempool
+	simulateBlocks(mutex, rw, peerID)
+	handled := true
+
 	// Periodic blockchain broadcast
 	go func() {
 		for {
 			time.Sleep(5 * time.Second)
 			mutex.Lock()
+
 			bytes, err := json.Marshal(Blockchain)
 			if err != nil {
 				log.Printf("[❌] Error marshaling blockchain: %v\n", err)
@@ -153,6 +159,15 @@ func writeData(rw *bufio.ReadWriter, peerID string) {
 		}
 	}()
 
+    validCmd := map[string]bool {
+        "help": true,
+        "add": true,
+        "tx": true,
+        "chain": true,
+        "peers": true,
+    }
+
+
 	// Read user input
 	stdReader := bufio.NewReader(os.Stdin)
 	for {
@@ -164,14 +179,20 @@ func writeData(rw *bufio.ReadWriter, peerID string) {
 		}
 
 		sendData = strings.TrimSpace(sendData) // remove whitespace
+        if !validCmd[sendData] {
+            fmt.Printf("\n[❌] Unknown command: %s\n", sendData)
+			fmt.Println("Please enter a valid command - Type 'help' to see a list of commands")
+            continue
+        }
 
 		switch sendData {
 		case "help":
 			fmt.Println("\n[📖] Commands:")
-			fmt.Println("  - Enter a number: Creates a new block with that BPM")
-			fmt.Println("  - chain: Shows current blockchain")
-			fmt.Println("  - peers: Shows connected peers")
-			fmt.Println("  - help: Shows this help message")
+			fmt.Println("  - add   [📦]: Manually creates a new block")
+			fmt.Println("  - tx    [📥]: Display incoming transactions")
+			fmt.Println("  - chain [🔗]: Shows current blockchain")
+			fmt.Println("  - peers [👥]: Shows connected peers")
+			fmt.Println("  - help  [📖]: Shows this help message")
 			continue
 
 		case "chain":
@@ -184,39 +205,48 @@ func writeData(rw *bufio.ReadWriter, peerID string) {
 		case "peers":
 			fmt.Printf("\n[👥] Connected to peer: %s\n", peerID)
 			continue
-		}
 
-		bpm, err := strconv.Atoi(sendData)
-		if err != nil {
-			fmt.Println("[❌] Please enter a number or valid command (try 'help')")
+		case "tx":
+			transactions.Lock.Lock()
+			fmt.Println("\n[] Current Mempool:")
+			for i, tx := range transactions.Data {
+				fmt.Printf("[%d] %+v\n", i, tx)
+				fmt.Printf("[%d] Properties %+v\n", i, tx.Properties)
+			}
+			transactions.Lock.Unlock()
 			continue
-		}
 
-		mutex.Lock()
-		newBlock := generateBlock(Blockchain[len(Blockchain)-1])
-		if isBlockValid(newBlock, Blockchain[len(Blockchain)-1]) {
-			Blockchain = append(Blockchain, newBlock)
-			log.Printf("\n[✨] Created new block with BPM: %d\n", bpm)
-			spew.Printf("[📦] Block details:\n%+v\n\n", newBlock)
-		}
+		case "add":
+			mutex.Lock()
+			prevBlock := Blockchain[len(Blockchain)-1]
+			newBlock := generateBlock(prevBlock.Index+1, prevBlock.Hash)
+			if isBlockValid(newBlock, prevBlock) {
+				Blockchain = append(Blockchain, newBlock)
+				log.Printf("\n[✨] Created new block: %d\n", newBlock.Index)
+				spew.Printf("[📦] Block details:\n%+v\n\n", newBlock)
+			}
 
-		bytes, err := json.Marshal(Blockchain)
-		if err != nil {
-			log.Printf("[❌] Error marshaling blockchain: %v\n", err)
-			mutex.Unlock()
-			continue
-		}
+			bytes, err := json.Marshal(Blockchain)
+			if err != nil {
+				log.Printf("[❌] Error marshaling blockchain: %v\n", err)
+				mutex.Unlock()
+				continue
+			}
 
-		_, err = rw.WriteString(fmt.Sprintf("%s\n", string(bytes)))
-		if err != nil {
-			log.Printf("[❌] Error broadcasting to peer %s: %v\n", peerID, err)
-			mutex.Unlock()
+			_, err = rw.WriteString(fmt.Sprintf("%s\n", string(bytes)))
+			if err != nil {
+				log.Printf("[❌] Error broadcasting to peer %s: %v\n", peerID, err)
+				mutex.Unlock()
+				continue
+			}
 			continue
 		}
 
 		// Flush forces the data to actually be sent.
 		// Without it data might sit in a buffer waiting to be sent.
-		err = rw.Flush()
+		if handled {
+			err = rw.Flush()
+		}
 		if err != nil {
 			log.Printf("[❌] Error flushing to peer %s: %v\n", peerID, err)
 			mutex.Unlock()
@@ -227,11 +257,18 @@ func writeData(rw *bufio.ReadWriter, peerID string) {
 }
 
 func main() {
+	// For profiling
+	go func() {
+		log.Println(http.ListenAndServe("localhost:6061", nil))
+	}()
+	// Simulate transaction mempool
+	simulateTransactions()
+
 	genesisBlock := NewBlock(
 		0,               // index
-		"genesis",              // previous hash
+		"genesis",       // previous hash
 		[]Transaction{}, // empty transactions
-		"genesis",              // signature
+		"genesis",       // signature
 		[]string{},      // merkle root
 		[]string{},      // new keys
 		"genesis",       // next miner
@@ -263,7 +300,6 @@ func main() {
 		select {}
 	} else {
 		ha.SetStreamHandler("/p2p/1.0.0", handleStream)
-
 		// Get address of the peer
 		peerAddr, err := multiaddr.NewMultiaddr(*target)
 		if err != nil {
@@ -301,7 +337,6 @@ func main() {
 }
 
 func isBlockValid(newBlock, oldBlock Block) bool {
-    fmt.Println(newBlock)
 	if oldBlock.Index+1 != newBlock.Index {
 		log.Printf("[❌] Invalid block index")
 		return false
@@ -334,18 +369,86 @@ func calculateHash(block Block) string {
 	return hex.EncodeToString(hashed)
 }
 
-func generateBlock(oldBlock Block) Block {
+func generateBlock(index int, hash string) Block {
+	/*     oldBlockHash := calculateHash(oldBlock) */
 	newBlock := NewBlock(
-		oldBlock.Index + 1,               // index
-		oldBlock.Hash,   // previous hash
-		[]Transaction{}, // empty transactions
-		"",              // signature
-		[]string{},      // merkle root
-		[]string{},      // new keys
+		index,             // index
+		hash,              // previous hash
+		[]Transaction{},   // empty transactions
+		"",                // signature
+		[]string{},        // merkle root
+		[]string{},        // new keys
 		"next miner test", // next miner
 	)
 
-    newBlock.Hash = calculateHash(newBlock)
+	newBlock.Hash = calculateHash(newBlock)
 
 	return newBlock
+}
+
+// Simulate a mempool of Transactions coming through
+type Transactions struct {
+	Lock sync.Mutex
+	Data []Transaction
+}
+
+var transactions = &Transactions{
+	Data: []Transaction{},
+}
+
+// Simulate transaction stream
+func simulateTransactions() {
+	go func() {
+		for {
+			time.Sleep(5 * time.Second) // Simulate a transaction every 5 seconds
+			tx := Transaction{
+				Sender:        mrand.Intn(10000),
+				Recipient:     fmt.Sprintf("Recipient %d", mrand.Intn(10000)),
+				Signature:     fmt.Sprintf("Signature %d", mrand.Intn(10000)),
+				Amount:        mrand.Intn(1000) + 1,
+				Properties:    fmt.Sprintf("Property %d", mrand.Intn(10)),
+				Computational: fmt.Sprintf("Data %d", mrand.Intn(10)),
+				Nonce:         mrand.Intn(10000),
+			}
+
+			// Add transaction to the mempool
+			transactions.Lock.Lock()
+			transactions.Data = append(transactions.Data, tx)
+			transactions.Lock.Unlock()
+
+			//log.Printf("[📥] New simulated transaction: %+v\n", tx)
+		}
+	}()
+}
+
+func simulateBlocks(mutex *sync.Mutex, rw *bufio.ReadWriter, peerID string) {
+	go func() {
+		for {
+			time.Sleep(10 * time.Second)
+			mutex.Lock()
+			prevBlock := Blockchain[len(Blockchain)-1]
+			newBlock := generateBlock(prevBlock.Index+1, prevBlock.Hash)
+
+			if isBlockValid(newBlock, prevBlock) {
+				Blockchain = append(Blockchain, newBlock)
+				/* log.Printf("\n[✨] Created new block: %d\n", newBlock.Index)
+				   spew.Printf("[📦] Block details:\n%+v\n\n", newBlock) */
+			}
+
+			bytes, err := json.Marshal(Blockchain)
+			if err != nil {
+				log.Printf("[❌] Error marshaling blockchain: %v\n", err)
+				mutex.Unlock()
+				continue
+			}
+
+			_, err = rw.WriteString(fmt.Sprintf("%s\n", string(bytes)))
+			if err != nil {
+				log.Printf("[❌] Error broadcasting to peer %s: %v\n", peerID, err)
+				mutex.Unlock()
+				continue
+			}
+			mutex.Unlock()
+		}
+	}()
 }
