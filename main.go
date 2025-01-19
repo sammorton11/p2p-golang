@@ -224,6 +224,8 @@ func writeData(rw *bufio.ReadWriter, peerID string) {
 				Blockchain = append(Blockchain, newBlock)
 				log.Printf("\n[✨] Created new block: %d\n", newBlock.Index)
 				spew.Printf("[📦] Block details:\n%+v\n\n", newBlock)
+                mutex.Unlock()
+                continue
 			}
 
 			bytes, err := json.Marshal(Blockchain)
