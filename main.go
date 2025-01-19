@@ -376,7 +376,6 @@ func main() {
 	}
 
 	// Publish node availability
-	// Publish node availability
 	go func() {
 		for {
 			topic.Publish(context.Background(), []byte(fmt.Sprintf("node-available:%s", h.ID())))
