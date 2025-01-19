@@ -256,85 +256,6 @@ func writeData(rw *bufio.ReadWriter, peerID string) {
 	}
 }
 
-func main() {
-	// For profiling
-	go func() {
-		log.Println(http.ListenAndServe("localhost:6061", nil))
-	}()
-	// Simulate transaction mempool
-	simulateTransactions()
-
-	genesisBlock := NewBlock(
-		0,               // index
-		"genesis",       // previous hash
-		[]Transaction{}, // empty transactions
-		"genesis",       // signature
-		[]string{},      // merkle root
-		[]string{},      // new keys
-		"genesis",       // next miner
-	)
-	genesisBlock.Hash = genesisBlock.CalculateHash()
-	Blockchain = append(Blockchain, genesisBlock)
-
-	// command line args to set the port, what peer to connect to, or random seed
-	listenF := flag.Int("l", 0, "wait for incoming connections")
-	target := flag.String("d", "", "target peer to dial")
-	seed := flag.Int64("seed", 0, "set random seed for id generation")
-	flag.Parse()
-
-	if *listenF == 0 {
-		log.Fatal("[❌] Please provide a port to bind on with -l")
-	}
-
-	// Create host application
-	ha, err := makeBasicHost(*listenF, *seed)
-	if err != nil {
-		log.Fatal(err)
-	}
-
-	// If no target - be a bootstrap node instead
-	// Else - attempt to connect to the existing node
-	if *target == "" {
-		log.Println("\n[👂] Listening for connections...")
-		ha.SetStreamHandler("/p2p/1.0.0", handleStream)
-		select {}
-	} else {
-		ha.SetStreamHandler("/p2p/1.0.0", handleStream)
-		// Get address of the peer
-		peerAddr, err := multiaddr.NewMultiaddr(*target)
-		if err != nil {
-			log.Fatal(err)
-		}
-
-		// Peer info for connecting
-		peerinfo, err := peer.AddrInfoFromP2pAddr(peerAddr)
-		if err != nil {
-			log.Fatal(err)
-		}
-
-		// Attempt to connect to peer
-		log.Printf("\n[🔄] Connecting to peer: %s\n", *target)
-		if err := ha.Connect(context.Background(), *peerinfo); err != nil {
-			log.Fatal(err)
-		}
-		// Taking in the stream from the peer
-		log.Printf("[✅] Connected to peer: %s\n", peerinfo.ID.String()[:12])
-		stream, err := ha.NewStream(context.Background(), peerinfo.ID, "/p2p/1.0.0")
-		if err != nil {
-			log.Fatal(err)
-		}
-
-		// Set up the two way communication
-		// Create buffered reader and writer for net comm
-		// Start goroutines to handle sending and receiving data
-		rw := bufio.NewReadWriter(bufio.NewReader(stream), bufio.NewWriter(stream))
-		go writeData(rw, peerinfo.ID.String()[:12])
-		go readData(rw, peerinfo.ID.String()[:12])
-
-		// wait forever while goroutines do all of the work
-		select {}
-	}
-}
 
 func isBlockValid(newBlock, oldBlock Block) bool {
 	if oldBlock.Index+1 != newBlock.Index {
@@ -451,4 +372,84 @@ func simulateBlocks(mutex *sync.Mutex, rw *bufio.ReadWriter, peerID string) {
 			mutex.Unlock()
 		}
 	}()
+}
+    
+func main() {
+    // For profiling
+    go func() {
+        log.Println(http.ListenAndServe("localhost:6061", nil))
+    }()
+    // Simulate transaction mempool
+    simulateTransactions()
+
+    genesisBlock := NewBlock(
+        0,               // index
+        "genesis",       // previous hash
+        []Transaction{}, // empty transactions
+        "genesis",       // signature
+        []string{},      // merkle root
+        []string{},      // new keys
+        "genesis",       // next miner
+    )
+    genesisBlock.Hash = genesisBlock.CalculateHash()
+    Blockchain = append(Blockchain, genesisBlock)
+
+    // command line args to set the port, what peer to connect to, or random seed
+    listenF := flag.Int("l", 0, "wait for incoming connections")
+    target := flag.String("d", "", "target peer to dial")
+    seed := flag.Int64("seed", 0, "set random seed for id generation")
+    flag.Parse()
+
+    if *listenF == 0 {
+        log.Fatal("[❌] Please provide a port to bind on with -l")
+    }
+
+    // Create host application
+    ha, err := makeBasicHost(*listenF, *seed)
+    if err != nil {
+        log.Fatal(err)
+    }
+
+    // If no target - be a bootstrap node instead
+    // Else - attempt to connect to the existing node
+    if *target == "" {
+        log.Println("\n[👂] Listening for connections...")
+        ha.SetStreamHandler("/p2p/1.0.0", handleStream)
+        select {}
+    } else {
+        ha.SetStreamHandler("/p2p/1.0.0", handleStream)
+        // Get address of the peer
+        peerAddr, err := multiaddr.NewMultiaddr(*target)
+        if err != nil {
+            log.Fatal(err)
+        }
+
+        // Peer info for connecting
+        peerinfo, err := peer.AddrInfoFromP2pAddr(peerAddr)
+        if err != nil {
+            log.Fatal(err)
+        }
+
+        // Attempt to connect to peer
+        log.Printf("\n[🔄] Connecting to peer: %s\n", *target)
+        if err := ha.Connect(context.Background(), *peerinfo); err != nil {
+            log.Fatal(err)
+        }
+        // Taking in the stream from the peer
+        log.Printf("[✅] Connected to peer: %s\n", peerinfo.ID.String()[:12])
+        stream, err := ha.NewStream(context.Background(), peerinfo.ID, "/p2p/1.0.0")
+        if err != nil {
+            log.Fatal(err)
+        }
+
+        // Set up the two way communication
+        // Create buffered reader and writer for net comm
+        // Start goroutines to handle sending and receiving data
+        rw := bufio.NewReadWriter(bufio.NewReader(stream), bufio.NewWriter(stream))
+        go writeData(rw, peerinfo.ID.String()[:12])
+        go readData(rw, peerinfo.ID.String()[:12])
+
+        // wait forever while goroutines do all of the work
+        select {}
+    }
 }
