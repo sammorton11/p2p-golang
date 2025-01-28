@@ -413,13 +413,13 @@ func main() {
 
 	// Start periodic node availability announcements
 	go func() {
-		//for {
-		msg := fmt.Sprintf("node-available:%s", h.ID())
-		if err := topic.Publish(ctx, []byte(msg)); err != nil {
-			log.Printf("[⚠️] Failed to publish availability: %s", err)
+		for {
+			msg := fmt.Sprintf("node-available:%s", h.ID())
+			if err := topic.Publish(ctx, []byte(msg)); err != nil {
+				log.Printf("[⚠️] Failed to publish availability: %s", err)
+			}
+			time.Sleep(DiscoveryInterval)
 		}
-		time.Sleep(DiscoveryInterval)
-		//}
 	}()
 
 	// Set up message listener
