@@ -433,8 +433,6 @@ func simulateBlocks(mutex *sync.Mutex, rw *bufio.ReadWriter, peerID string) {
 
 			if isBlockValid(newBlock, prevBlock) {
 				Blockchain = append(Blockchain, newBlock)
-				/* log.Printf("\n[✨] Created new block: %d\n", newBlock.Index)
-				   spew.Printf("[📦] Block details:\n%+v\n\n", newBlock) */
 			}
 
 			bytes, err := json.Marshal(Blockchain)
