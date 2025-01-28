@@ -36,7 +36,7 @@ const (
 	BootstrapPort      = 6666
 	DiscoveryInterval  = 10 * time.Second
 	ConnTimeout        = 30 * time.Second
-    BOOTSTRAP_ADDRESS = "/ip4/127.0.0.1/tcp/6666/p2p/12D3KooWRycpQeKrLnU9k7fLnqG9XH33zdytbXqUjuAN2MwHy2Yp"
+	BOOTSTRAP_ADDRESS  = "/ip4/127.0.0.1/tcp/6666/p2p/12D3KooWRycpQeKrLnU9k7fLnqG9XH33zdytbXqUjuAN2MwHy2Yp"
 )
 
 // Blockchain types
@@ -56,8 +56,8 @@ var (
 )
 
 const (
-    BOOTSTRAP_KEY = "08011240ef34c7af2720bd2aec008490b79ed98ffaf0c7e05911c248e6ef2071ff284f25f019c83ee32540faba9b65162877967487941ff3e5cc968fab0012a193502459"
-    BOOTSTRAP_ID  = "12D3KooWRycpQeKrLnU9k7fLnqG9XH33zdytbXqUjuAN2MwHy2Yp"
+	BOOTSTRAP_KEY = "08011240ef34c7af2720bd2aec008490b79ed98ffaf0c7e05911c248e6ef2071ff284f25f019c83ee32540faba9b65162877967487941ff3e5cc968fab0012a193502459"
+	BOOTSTRAP_ID  = "12D3KooWRycpQeKrLnU9k7fLnqG9XH33zdytbXqUjuAN2MwHy2Yp"
 )
 
 func init() {
@@ -155,11 +155,11 @@ func makeHost(ctx context.Context, port int, bootstrapNode bool) (host.Host, err
 }
 
 func getBootstrapKey() (crypto.PrivKey, error) {
-    privKeyBytes, err := hex.DecodeString(BOOTSTRAP_KEY)
-    if err != nil {
-        return nil, err
-    }
-    return crypto.UnmarshalPrivateKey(privKeyBytes)
+	privKeyBytes, err := hex.DecodeString(BOOTSTRAP_KEY)
+	if err != nil {
+		return nil, err
+	}
+	return crypto.UnmarshalPrivateKey(privKeyBytes)
 }
 
 // Stream handling
@@ -414,11 +414,11 @@ func main() {
 	// Start periodic node availability announcements
 	go func() {
 		//for {
-			msg := fmt.Sprintf("node-available:%s", h.ID())
-			if err := topic.Publish(ctx, []byte(msg)); err != nil {
-				log.Printf("[⚠️] Failed to publish availability: %s", err)
-			}
-			time.Sleep(DiscoveryInterval)
+		msg := fmt.Sprintf("node-available:%s", h.ID())
+		if err := topic.Publish(ctx, []byte(msg)); err != nil {
+			log.Printf("[⚠️] Failed to publish availability: %s", err)
+		}
+		time.Sleep(DiscoveryInterval)
 		//}
 	}()
 
@@ -482,17 +482,17 @@ func main() {
 
 // Ignore this
 func generateNewBootstrapKeys() {
-    priv, _, err := crypto.GenerateKeyPair(crypto.Ed25519, -1)
-    if err != nil {
-        log.Fatal(err)
-    }
-    privBytes, err := crypto.MarshalPrivateKey(priv)
-    if err != nil {
-        log.Fatal(err)
-    }
-    
-    // Print the key info
-    log.Printf("Private key: %s", hex.EncodeToString(privBytes))
-    id, _ := peer.IDFromPrivateKey(priv)
-    log.Printf("Peer ID: %s", id)
+	priv, _, err := crypto.GenerateKeyPair(crypto.Ed25519, -1)
+	if err != nil {
+		log.Fatal(err)
+	}
+	privBytes, err := crypto.MarshalPrivateKey(priv)
+	if err != nil {
+		log.Fatal(err)
+	}
+
+	// Print the key info
+	log.Printf("Private key: %s", hex.EncodeToString(privBytes))
+	id, _ := peer.IDFromPrivateKey(priv)
+	log.Printf("Peer ID: %s", id)
 }
