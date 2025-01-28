@@ -3,6 +3,7 @@ package main
 import (
 	"bufio"
 	"context"
+	"encoding/hex"
 	"encoding/json"
 	"flag"
 	"fmt"
@@ -18,8 +19,10 @@ import (
 	"github.com/libp2p/go-libp2p"
 	dht "github.com/libp2p/go-libp2p-kad-dht"
 	pubsub "github.com/libp2p/go-libp2p-pubsub"
+	"github.com/libp2p/go-libp2p/core/crypto"
 	"github.com/libp2p/go-libp2p/core/host"
 	"github.com/libp2p/go-libp2p/core/network"
+	"github.com/libp2p/go-libp2p/core/peer"
 	"github.com/libp2p/go-libp2p/core/routing"
 	drouting "github.com/libp2p/go-libp2p/p2p/discovery/routing"
 	dutil "github.com/libp2p/go-libp2p/p2p/discovery/util"
@@ -27,152 +30,139 @@ import (
 	"github.com/multiformats/go-multiaddr"
 )
 
+// Constants
+const (
+	DiscoveryNamespace = "/blockchain/1.0.0"
+	BootstrapPort      = 6666
+	DiscoveryInterval  = 10 * time.Second
+	ConnTimeout        = 30 * time.Second
+    BOOTSTRAP_ADDRESS = "/ip4/127.0.0.1/tcp/6666/p2p/12D3KooWRycpQeKrLnU9k7fLnqG9XH33zdytbXqUjuAN2MwHy2Yp"
+)
+
+// Blockchain types
 type Transactions struct {
 	Lock sync.Mutex
 	Data []Transaction
 }
 
+// Global variables
 var (
-	Blockchain   []Block
-	mutex        = &sync.Mutex{}
-	transactions = &Transactions{
+	BootstrapMultiaddr multiaddr.Multiaddr
+	Blockchain         []Block
+	mutex              = &sync.Mutex{}
+	transactions       = &Transactions{
 		Data: []Transaction{},
 	}
 )
 
-const BOOTSTRAP_PORT = 6666
+const (
+    BOOTSTRAP_KEY = "08011240ef34c7af2720bd2aec008490b79ed98ffaf0c7e05911c248e6ef2071ff284f25f019c83ee32540faba9b65162877967487941ff3e5cc968fab0012a193502459"
+    BOOTSTRAP_ID  = "12D3KooWRycpQeKrLnU9k7fLnqG9XH33zdytbXqUjuAN2MwHy2Yp"
+)
 
-func getBootstrapPeerAddr() multiaddr.Multiaddr {
-	addr, err := multiaddr.NewMultiaddr(fmt.Sprintf("/ip4/127.0.0.1/tcp/%d", BOOTSTRAP_PORT))
+func init() {
+	var err error
+	BootstrapMultiaddr, err = multiaddr.NewMultiaddr(fmt.Sprintf("/ip4/127.0.0.1/tcp/6666/p2p/%s", BOOTSTRAP_ID))
 	if err != nil {
-		log.Fatal(err)
+		log.Fatal("Failed to create bootstrap multiaddr:", err)
 	}
-	return addr
-}
-
-// Add at the top of your file with other vars
-var defaultBootstrapPeers = []multiaddr.Multiaddr{
-	// We'll fill this in the main function when bootstrap node starts
-	// This will be our known bootstrap node address
 }
 
 func setupPubSub(h host.Host) (*pubsub.PubSub, error) {
 	return pubsub.NewGossipSub(context.Background(), h)
 }
 
-func discoverPeers(ctx context.Context, h host.Host, dht *dht.IpfsDHT) {
+func startDiscovery(ctx context.Context, h host.Host, dht *dht.IpfsDHT) {
 	discovery := drouting.NewRoutingDiscovery(dht)
-
-	// Advertise our service
-	dutil.Advertise(ctx, discovery, "/blockchain/1.0.0")
+	dutil.Advertise(ctx, discovery, DiscoveryNamespace)
 
 	go func() {
 		for {
-			// Standard FindPeers method
-			peerChan, err := discovery.FindPeers(ctx, "/blockchain/1.0.0")
+			peerChan, err := discovery.FindPeers(ctx, DiscoveryNamespace)
 			if err != nil {
-				log.Printf("Peer discovery error: %v", err)
-				time.Sleep(time.Minute)
+				log.Printf("Discovery error: %s", err)
+				time.Sleep(DiscoveryInterval)
 				continue
 			}
 
 			for peer := range peerChan {
-				// Skip self and already connected peers
-				if peer.ID == h.ID() ||
-					len(h.Network().ConnsToPeer(peer.ID)) > 0 {
+				if peer.ID == h.ID() || len(h.Network().ConnsToPeer(peer.ID)) > 0 {
 					continue
 				}
 
-				// Attempt connection with timeout
-				connectCtx, cancel := context.WithTimeout(ctx, time.Minute)
-				err := h.Connect(connectCtx, peer)
+				connectCtx, cancel := context.WithTimeout(ctx, ConnTimeout)
+				if err := h.Connect(connectCtx, peer); err != nil {
+					log.Printf("Connection failed: %s", err)
+				} else {
+					log.Printf("Connected to peer: %s", peer.ID.String()[:12])
+					stream, err := h.NewStream(ctx, peer.ID, DiscoveryNamespace)
+					if err == nil {
+						go handleStream(stream)
+					}
+				}
 				cancel()
-
-				if err != nil {
-					log.Printf("Failed to connect to peer %s: %v",
-						peer.ID.String()[:12], err)
-					continue
-				}
-
-				log.Printf("Connected to new peer: %s", peer.ID.String()[:12])
-
-				// Attempt to open stream
-				stream, err := h.NewStream(ctx, peer.ID, "/blockchain/1.0.0")
-				if err != nil {
-					log.Printf("Stream error: %v", err)
-					continue
-				}
-
-				rw := bufio.NewReadWriter(bufio.NewReader(stream), bufio.NewWriter(stream))
-				go readData(rw, peer.ID.String()[:12])
-				go writeData(rw, peer.ID.String()[:12])
 			}
 
-			// Wait between discovery cycles
-			time.Sleep(time.Minute)
+			time.Sleep(DiscoveryInterval)
 		}
 	}()
 }
 
-func setupDHT(ctx context.Context, host host.Host, bootstrapPeer bool) (*dht.IpfsDHT, error) {
-	var dhtOpts []dht.Option
-	if bootstrapPeer {
-		fmt.Println("This is a bootstrap")
-		// Bootstrap nodes run in server mode
-		log.Printf("[🔧] Creating DHT in server mode (bootstrap node)")
-		dhtOpts = []dht.Option{dht.Mode(dht.ModeServer)}
+func setupDHT(ctx context.Context, h host.Host, bootstrapNode bool) (*dht.IpfsDHT, error) {
+	var opts []dht.Option
+	if bootstrapNode {
+		opts = []dht.Option{dht.Mode(dht.ModeServer)}
 	} else {
-		// Regular nodes run in client mode
-		log.Printf("[🔧] Creating DHT in client mode (full node)")
-		dhtOpts = []dht.Option{dht.Mode(dht.ModeClient)}
+		opts = []dht.Option{dht.Mode(dht.ModeClient)}
 	}
 
-	kdht, err := dht.New(ctx, host, dhtOpts...)
+	kdht, err := dht.New(ctx, h, opts...)
 	if err != nil {
 		return nil, err
 	}
 
-	// Bootstrap the DHT
 	if err = kdht.Bootstrap(ctx); err != nil {
-		return nil, fmt.Errorf("failed to bootstrap DHT: %s", err)
+		return nil, err
 	}
 
 	return kdht, nil
 }
 
-func makeHost(ctx context.Context, port int, bootstrapPeer bool) (host.Host, *dht.IpfsDHT, error) {
-	// Create DHT instance first
-	var kadDHT *dht.IpfsDHT
+func makeHost(ctx context.Context, port int, bootstrapNode bool) (host.Host, error) {
+	var opts []libp2p.Option
 
-	// Create routing function that will set up DHT
-	routing := func(h host.Host) (routing.PeerRouting, error) {
-		var err error
-		kadDHT, err = setupDHT(ctx, h, bootstrapPeer)
-		return kadDHT, err
-	}
-
-	// Create libp2p options including routing
-	opts := []libp2p.Option{
+	// Base options
+	opts = []libp2p.Option{
 		libp2p.ListenAddrStrings(fmt.Sprintf("/ip4/0.0.0.0/tcp/%d", port)),
 		libp2p.Security(noise.ID, noise.New),
-		libp2p.Routing(routing),
 		libp2p.EnableNATService(),
+		libp2p.EnableHolePunching(),
+		libp2p.Routing(func(h host.Host) (routing.PeerRouting, error) {
+			return setupDHT(ctx, h, bootstrapNode)
+		}),
 	}
 
-	h, err := libp2p.New(opts...)
-	if err != nil {
-		return nil, nil, err
+	// Add bootstrap node specific options
+	if bootstrapNode {
+		privKey, err := getBootstrapKey()
+		if err != nil {
+			return nil, fmt.Errorf("bootstrap key error: %w", err)
+		}
+		opts = append(opts, libp2p.Identity(privKey))
 	}
 
-	// Print host info
-	for _, addr := range h.Addrs() {
-		fullAddr := fmt.Sprintf("%s/p2p/%s", addr, h.ID())
-		log.Printf("[📍] Listening on: %s", fullAddr)
-	}
-
-	return h, kadDHT, nil
+	return libp2p.New(opts...)
 }
 
+func getBootstrapKey() (crypto.PrivKey, error) {
+    privKeyBytes, err := hex.DecodeString(BOOTSTRAP_KEY)
+    if err != nil {
+        return nil, err
+    }
+    return crypto.UnmarshalPrivateKey(privKeyBytes)
+}
+
+// Stream handling
 func handleStream(s network.Stream) {
 	log.Printf("\n[👥] New peer connected: %s\n", s.Conn().RemotePeer().String()[:12])
 	rw := bufio.NewReadWriter(bufio.NewReader(s), bufio.NewWriter(s))
@@ -241,6 +231,7 @@ func writeData(rw *bufio.ReadWriter, peerID string) {
 	}()
 }
 
+// Simulation functions
 func simulateTransactions() {
 	go func() {
 		for {
@@ -321,7 +312,7 @@ func initFakeChain() {
 		0,
 		"genesis",
 		[]Transaction{},
-		"genesis",
+		"",
 		[]string{},
 		[]string{},
 		"genesis",
@@ -329,105 +320,8 @@ func initFakeChain() {
 	Blockchain = append(Blockchain, genesisBlock)
 }
 
-func main() {
-	// For profiling
-	go func() {
-		log.Println(http.ListenAndServe("localhost:6061", nil))
-	}()
-
-	// Create a background context
-	ctx := context.Background()
-
-	// Parse command line flags
-	port := flag.Int("p", 0, "port to listen on")
-	isBootstrap := flag.Bool("bootstrap", false, "run as bootstrap node")
-	flag.Parse()
-
-	if *port == 0 {
-		log.Fatal("[❌] Please provide a port with -p")
-	}
-
-	// Initialize blockchain and start transaction simulator
-	initFakeChain()
-	simulateTransactions()
-
-	// Create libp2p host with DHT
-	h, kadDHT, err := makeHost(ctx, *port, *isBootstrap)
-	if err != nil {
-		log.Fatal(err)
-	}
-
-	// Setup PubSub
-	ps, err := setupPubSub(h)
-	if err != nil {
-		log.Fatal(err)
-	}
-
-	// Join blockchain topic
-	topic, err := ps.Join("blockchain-network")
-	if err != nil {
-		log.Fatal(err)
-	}
-
-	// Subscribe to receive messages
-	sub, err := topic.Subscribe()
-	if err != nil {
-		log.Fatal(err)
-	}
-
-	// Publish node availability
-	go func() {
-		for {
-			topic.Publish(context.Background(), []byte(fmt.Sprintf("node-available:%s", h.ID())))
-			time.Sleep(time.Minute)
-		}
-	}()
-
-	// Listen for incoming messages
-	go func() {
-		for {
-			msg, err := sub.Next(context.Background())
-			if err != nil {
-				log.Println("Subscription error:", err)
-				continue
-			}
-			log.Printf("Received pubsub message: %s", string(msg.Data))
-		}
-	}()
-
-	// Set protocol handler for all nodes
-	h.SetStreamHandler("/blockchain/1.0.0", handleStream)
-
-	// Bootstrap the DHT
-	if err := kadDHT.Bootstrap(ctx); err != nil {
-		log.Printf("[⚠️] Failed to bootstrap DHT: %s", err)
-	}
-
-	// Print the full address
-	hostAddr, _ := multiaddr.NewMultiaddr(fmt.Sprintf("/p2p/%s", h.ID()))
-	addr := h.Addrs()[0]
-	fullAddr := addr.Encapsulate(hostAddr)
-	log.Printf("\n[📝] Full node address: %s\n", fullAddr)
-
-	// If this is the bootstrap node, update the defaultBootstrapPeers
-	if *isBootstrap {
-		if *port != BOOTSTRAP_PORT {
-			log.Fatal("Bootstrap node must run on port", BOOTSTRAP_PORT)
-		}
-		log.Printf("[📡] Running as bootstrap node on port %d\n", *port)
-
-		routingDiscovery := drouting.NewRoutingDiscovery(kadDHT)
-		dutil.Advertise(ctx, routingDiscovery, "/blockchain/1.0.0")
-		log.Printf("[📢] Bootstrap node is advertising on DHT")
-	} else {
-		log.Printf("[📡] Running as full node on port %d\n", *port)
-		// Connect to known bootstrap node address
-		bootstrapAddr := getBootstrapPeerAddr()
-		defaultBootstrapPeers = []multiaddr.Multiaddr{bootstrapAddr}
-		discoverPeers(ctx, h, kadDHT)
-	}
-
-	// Command line interface
+// CLI Interface
+func commandLineInterface(h host.Host) {
 	stdReader := bufio.NewReader(os.Stdin)
 	for {
 		fmt.Print("> ")
@@ -465,4 +359,140 @@ func main() {
 			fmt.Println("[❌] Unknown command. Type 'help' for available commands.")
 		}
 	}
+}
+
+func main() {
+	// Enable pprof for debugging
+	go func() {
+		log.Println(http.ListenAndServe("localhost:6061", nil))
+	}()
+
+	// Create a background context
+	ctx := context.Background()
+
+	// Parse command line flags
+	port := flag.Int("p", 0, "port to listen on")
+	isBootstrap := flag.Bool("bootstrap", false, "run as bootstrap node")
+	flag.Parse()
+
+	if *port == 0 {
+		log.Fatal("[❌] Please provide a port with -p")
+	}
+
+	// Validate bootstrap port
+	if *isBootstrap && *port != BootstrapPort {
+		log.Fatalf("[❌] Bootstrap node must run on port %d", BootstrapPort)
+	}
+
+	// Initialize blockchain and start transaction simulator
+	initFakeChain()
+	simulateTransactions()
+
+	// Create libp2p host
+	h, err := makeHost(ctx, *port, *isBootstrap)
+	if err != nil {
+		log.Fatal("[❌] Failed to create host:", err)
+	}
+
+	// Set up pubsub
+	ps, err := setupPubSub(h)
+	if err != nil {
+		log.Fatal("[❌] Failed to setup pubsub:", err)
+	}
+
+	// Join blockchain topic and subscribe
+	topic, err := ps.Join("blockchain-network")
+	if err != nil {
+		log.Fatal("[❌] Failed to join topic:", err)
+	}
+
+	sub, err := topic.Subscribe()
+	if err != nil {
+		log.Fatal("[❌] Failed to subscribe:", err)
+	}
+
+	// Start periodic node availability announcements
+	go func() {
+		//for {
+			msg := fmt.Sprintf("node-available:%s", h.ID())
+			if err := topic.Publish(ctx, []byte(msg)); err != nil {
+				log.Printf("[⚠️] Failed to publish availability: %s", err)
+			}
+			time.Sleep(DiscoveryInterval)
+		//}
+	}()
+
+	// Set up message listener
+	go func() {
+		for {
+			msg, err := sub.Next(ctx)
+			if err != nil {
+				log.Printf("[⚠️] Subscription error: %s", err)
+				continue
+			}
+			if msg.ReceivedFrom == h.ID() {
+				continue // Skip own messages
+			}
+			log.Printf("[📨] Received: %s from %s", string(msg.Data), msg.ReceivedFrom.String()[:12])
+		}
+	}()
+
+	// Set protocol handler
+	h.SetStreamHandler(DiscoveryNamespace, handleStream)
+
+	// Print node information
+	for _, addr := range h.Addrs() {
+		fullAddr := fmt.Sprintf("%s/p2p/%s", addr, h.ID())
+		log.Printf("[📍] Listening on: %s", fullAddr)
+	}
+
+	// Bootstrap node setup
+	if *isBootstrap {
+		log.Printf("[📡] Running as bootstrap node on port %d", *port)
+		// Get the DHT from the host's network
+		if dht, ok := h.Network().(interface{ GetRoutingBackend() *dht.IpfsDHT }); ok {
+			routingDiscovery := drouting.NewRoutingDiscovery(dht.GetRoutingBackend())
+			dutil.Advertise(ctx, routingDiscovery, DiscoveryNamespace)
+			log.Printf("[📢] Bootstrap node is advertising on DHT")
+		}
+	} else {
+		log.Printf("[📡] Running as full node on port %d", *port)
+
+		// Connect to bootstrap node
+		peerInfo, err := peer.AddrInfoFromP2pAddr(BootstrapMultiaddr)
+		if err != nil {
+			log.Printf("[⚠️] Failed to parse bootstrap address: %s", err)
+		} else {
+			if err := h.Connect(ctx, *peerInfo); err != nil {
+				log.Printf("[⚠️] Failed to connect to bootstrap node: %s", err)
+			} else {
+				log.Printf("[✅] Connected to bootstrap node")
+			}
+		}
+
+		// Start peer discovery
+		if dht, ok := h.Network().(interface{ GetRoutingBackend() *dht.IpfsDHT }); ok {
+			startDiscovery(ctx, h, dht.GetRoutingBackend())
+		}
+	}
+
+	// Start CLI
+	commandLineInterface(h)
+}
+
+// Ignore this
+func generateNewBootstrapKeys() {
+    priv, _, err := crypto.GenerateKeyPair(crypto.Ed25519, -1)
+    if err != nil {
+        log.Fatal(err)
+    }
+    privBytes, err := crypto.MarshalPrivateKey(priv)
+    if err != nil {
+        log.Fatal(err)
+    }
+    
+    // Print the key info
+    log.Printf("Private key: %s", hex.EncodeToString(privBytes))
+    id, _ := peer.IDFromPrivateKey(priv)
+    log.Printf("Peer ID: %s", id)
 }
