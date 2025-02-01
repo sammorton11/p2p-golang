@@ -1,0 +1,7 @@
+2025/02/01 15:39:46 [DHT] Initializing bootstrap node in server mode
+2025/02/01 15:39:46 [📍] Listening on: /ip4/127.0.0.1/tcp/6666/p2p/12D3KooWRycpQeKrLnU9k7fLnqG9XH33zdytbXqUjuAN2MwHy2Yp
+2025/02/01 15:39:46 [📍] Listening on: /ip4/192.168.0.10/tcp/6666/p2p/12D3KooWRycpQeKrLnU9k7fLnqG9XH33zdytbXqUjuAN2MwHy2Yp
+2025/02/01 15:39:46 [📡] Running as bootstrap node on port 6666
+2025/02/01 15:39:46 [📢] Bootstrap node is advertising on DHT
+> 2025/02/01 15:39:46 EOF
+exit status 1

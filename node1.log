@@ -1,0 +1,10 @@
+2025/02/01 15:39:47 [DHT] Initializing peer node in client mode
+2025/02/01 15:39:47 [📍] Listening on: /ip4/127.0.0.1/tcp/6667/p2p/12D3KooWH3kbFYF6BXt3wET31ShCZpMKBYsBy1NA9VgKaHNCVF3L
+2025/02/01 15:39:47 [📍] Listening on: /ip4/192.168.0.10/tcp/6667/p2p/12D3KooWH3kbFYF6BXt3wET31ShCZpMKBYsBy1NA9VgKaHNCVF3L
+2025/02/01 15:39:47 [📡] Running as full node on port 6667
+2025/02/01 15:39:47 [⚠️] Failed to connect to bootstrap node: failed to dial: failed to dial 12D3KooWRycpQeKrLnU9k7fLnqG9XH33zdytbXqUjuAN2MwHy2Yp: all dials failed
+  * [/ip4/127.0.0.1/tcp/6666] dial tcp4 127.0.0.1:6666: connect: connection refused
+2025/02/01 15:39:47 
+STARTING DISCOVERY
+> 2025/02/01 15:39:47 EOF
+exit status 1

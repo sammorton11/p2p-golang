@@ -7,15 +7,17 @@ import (
 	"encoding/json"
 	"flag"
 	"fmt"
-	"github.com/davecgh/go-spew/spew"
 	"log"
 	mrand "math/rand"
 	"net/http"
 	_ "net/http/pprof"
 	"os"
+	"reflect"
 	"strings"
 	"sync"
 	"time"
+
+	"github.com/davecgh/go-spew/spew"
 
 	"github.com/libp2p/go-libp2p"
 	dht "github.com/libp2p/go-libp2p-kad-dht"
@@ -31,11 +33,19 @@ import (
 	"github.com/multiformats/go-multiaddr"
 )
 
+/*
+TODO:
+    This check is failing all over:
+
+        if dht, ok := h.Network().(interface{ GetRoutingBackend() *dht.IpfsDHT }); ok {
+
+*/
+
 // Constants
 const (
 	DiscoveryNamespace = "/blockchain/1.0.0"
 	BootstrapPort      = 6666
-	DiscoveryInterval  = 10 * time.Second
+	DiscoveryInterval  = 3 * time.Second
 	ConnTimeout        = 30 * time.Second
 	BOOTSTRAP_ADDRESS  = "/ip4/127.0.0.1/tcp/6666/p2p/12D3KooWRycpQeKrLnU9k7fLnqG9XH33zdytbXqUjuAN2MwHy2Yp"
 )
@@ -48,12 +58,14 @@ type Transactions struct {
 
 // Global variables
 var (
+	NodeID             = fmt.Sprintf("Node-%d", mrand.Intn(1000)) // giving each Transaction a unique ID to help with tracking - just for testing purposes
 	BootstrapMultiaddr multiaddr.Multiaddr
 	Blockchain         []Block
 	mutex              = &sync.Mutex{}
 	transactions       = &Transactions{
 		Data: []Transaction{},
 	}
+    globalDHT *dht.IpfsDHT
 )
 
 const (
@@ -74,6 +86,7 @@ func setupPubSub(h host.Host) (*pubsub.PubSub, error) {
 }
 
 func startDiscovery(ctx context.Context, h host.Host, dht *dht.IpfsDHT) {
+	log.Println("\nSTARTING DISCOVERY")
 	discovery := drouting.NewRoutingDiscovery(dht)
 	dutil.Advertise(ctx, discovery, DiscoveryNamespace)
 
@@ -97,6 +110,7 @@ func startDiscovery(ctx context.Context, h host.Host, dht *dht.IpfsDHT) {
 				} else {
 					log.Printf("Connected to peer: %s", peer.ID.String()[:12])
 					stream, err := h.NewStream(ctx, peer.ID, DiscoveryNamespace)
+					fmt.Println("HEEERRREEE BITCH")
 					if err == nil {
 						go handleStream(stream)
 					}
@@ -111,10 +125,23 @@ func startDiscovery(ctx context.Context, h host.Host, dht *dht.IpfsDHT) {
 
 func setupDHT(ctx context.Context, h host.Host, bootstrapNode bool) (*dht.IpfsDHT, error) {
 	var opts []dht.Option
+
 	if bootstrapNode {
-		opts = []dht.Option{dht.Mode(dht.ModeServer)}
+		log.Printf("[DHT] Initializing bootstrap node in server mode")
+		opts = []dht.Option{
+			dht.Mode(dht.ModeServer),
+			dht.ProtocolPrefix("/blockchain"),
+		}
 	} else {
-		opts = []dht.Option{dht.Mode(dht.ModeClient)}
+		log.Printf("[DHT] Initializing peer node in client mode")
+		opts = []dht.Option{
+			dht.Mode(dht.ModeAutoServer),
+			dht.ProtocolPrefix("/blockchain"),
+			dht.BootstrapPeers(peer.AddrInfo{
+				ID:    peer.ID(BOOTSTRAP_ID),
+				Addrs: []multiaddr.Multiaddr{BootstrapMultiaddr},
+			}),
+		}
 	}
 
 	kdht, err := dht.New(ctx, h, opts...)
@@ -126,8 +153,22 @@ func setupDHT(ctx context.Context, h host.Host, bootstrapNode bool) (*dht.IpfsDH
 		return nil, err
 	}
 
+	go func() {
+		for {
+			select {
+			case <-ctx.Done():
+				return
+			case <-time.After(time.Second * 30):
+				if err := kdht.Bootstrap(ctx); err != nil {
+					log.Printf("[DHT] Failed to refresh routing table: %s", err)
+				}
+			}
+		}
+	}()
+
 	return kdht, nil
 }
+
 
 func makeHost(ctx context.Context, port int, bootstrapNode bool) (host.Host, error) {
 	var opts []libp2p.Option
@@ -139,7 +180,16 @@ func makeHost(ctx context.Context, port int, bootstrapNode bool) (host.Host, err
 		libp2p.EnableNATService(),
 		libp2p.EnableHolePunching(),
 		libp2p.Routing(func(h host.Host) (routing.PeerRouting, error) {
-			return setupDHT(ctx, h, bootstrapNode)
+			dht, err := setupDHT(ctx, h, bootstrapNode)
+			if err != nil {
+                log.Println("Error settin up DHT")
+				return nil, err
+			}
+
+            // Should we just add the addresses to the dht here.. or.. idk..
+            globalDHT = dht
+
+			return dht, nil
 		}),
 	}
 
@@ -165,9 +215,14 @@ func getBootstrapKey() (crypto.PrivKey, error) {
 
 // Stream handling
 func handleStream(s network.Stream) {
+	log.Printf("HEEELLLOOOOO")
 	log.Printf("\n[👥] New peer connected: %s\n", s.Conn().RemotePeer().String()[:12])
 	rw := bufio.NewReadWriter(bufio.NewReader(s), bufio.NewWriter(s))
+
+	log.Println("SUPPOSED TO BE READING DATA...")
 	go readData(rw, s.Conn().RemotePeer().String()[:12])
+
+	log.Println("SUPPOSED TO BE WRITING DATA...")
 	go writeData(rw, s.Conn().RemotePeer().String()[:12])
 }
 
@@ -201,6 +256,7 @@ func readData(rw *bufio.ReadWriter, peerID string) {
 }
 
 func writeData(rw *bufio.ReadWriter, peerID string) {
+	log.Println("Supposed to be simulating blocks...")
 	simulateBlocks(mutex, rw, peerID)
 
 	go func() {
@@ -248,16 +304,22 @@ func simulateTransactions() {
 			}
 
 			transactions.Lock.Lock()
+
+			//log.Printf("\n[💫] %s created transaction: Amount=%d, Signature=%s\n", NodeID, tx.Amount, tx.Signature)
 			transactions.Data = append(transactions.Data, tx)
+
 			transactions.Lock.Unlock()
 		}
 	}()
 }
 
 func simulateBlocks(mutex *sync.Mutex, rw *bufio.ReadWriter, peerID string) {
+	log.Println("In the func of simulate blocks")
+
 	go func() {
+		log.Println("In the GO func of simulate blocks")
 		for {
-			time.Sleep(10 * time.Second)
+			time.Sleep(2 * time.Second)
 			mutex.Lock()
 			prevBlock := Blockchain[len(Blockchain)-1]
 			newBlock := NewBlock(
@@ -267,7 +329,7 @@ func simulateBlocks(mutex *sync.Mutex, rw *bufio.ReadWriter, peerID string) {
 				"",
 				[]string{},
 				[]string{},
-				"next miner test",
+				fmt.Sprintf("miner-%s", NodeID),
 			)
 
 			if isBlockValid(newBlock, prevBlock) {
@@ -275,7 +337,6 @@ func simulateBlocks(mutex *sync.Mutex, rw *bufio.ReadWriter, peerID string) {
 				log.Printf("\n[✨] Created new block: %d\n", newBlock.Index)
 				spew.Printf("[📦] Block details:\n%+v\n\n", newBlock)
 				mutex.Unlock()
-				continue
 			}
 
 			bytes, err := json.Marshal(Blockchain)
@@ -328,6 +389,7 @@ func initFakeChain() {
 // CLI Interface
 func commandLineInterface(h host.Host) {
 	stdReader := bufio.NewReader(os.Stdin)
+
 	for {
 		fmt.Print("> ")
 		sendData, err := stdReader.ReadString('\n')
@@ -400,7 +462,7 @@ func main() {
 	}
 
 	// Set up pubsub
-	ps, err := setupPubSub(h)
+	/* ps, err := setupPubSub(h)
 	if err != nil {
 		log.Fatal("[❌] Failed to setup pubsub:", err)
 	}
@@ -419,12 +481,11 @@ func main() {
 	// Start periodic node availability announcements
 	go func() {
 		for {
-			msg := fmt.Sprintf("node-available:%s", h.ID())
+			//msg := fmt.Sprintf("node-available:%s", h.ID())
 			if err := topic.Publish(ctx, []byte(msg)); err != nil {
 				log.Printf("[⚠️] Failed to publish availability: %s", err)
 			}
 			time.Sleep(DiscoveryInterval)
-
 		}
 	}()
 
@@ -441,7 +502,7 @@ func main() {
 			}
 			log.Printf("[📨] Received: %s from %s", string(msg.Data), msg.ReceivedFrom.String()[:12])
 		}
-	}()
+	}() */
 
 	// Set protocol handler
 	h.SetStreamHandler(DiscoveryNamespace, handleStream)
@@ -456,11 +517,18 @@ func main() {
 	if *isBootstrap {
 		log.Printf("[📡] Running as bootstrap node on port %d", *port)
 		// Get the DHT from the host's network
-		if dht, ok := h.Network().(interface{ GetRoutingBackend() *dht.IpfsDHT }); ok {
-			routingDiscovery := drouting.NewRoutingDiscovery(dht.GetRoutingBackend())
+
+		//TODO: this is broken -- there is probably a different way to get the dht so we can add stuff to it?... right?? idk.
+		if globalDHT != nil {
+			routingDiscovery := drouting.NewRoutingDiscovery(globalDHT)
 			dutil.Advertise(ctx, routingDiscovery, DiscoveryNamespace)
 			log.Printf("[📢] Bootstrap node is advertising on DHT")
+		} else {
+			network := h.Network()
+			actualType := reflect.TypeOf(network)
+			log.Printf("Actual network type: %v", actualType)
 		}
+
 	} else {
 		log.Printf("[📡] Running as full node on port %d", *port)
 
@@ -476,9 +544,11 @@ func main() {
 			}
 		}
 
-		// Start peer discovery
-		if dht, ok := h.Network().(interface{ GetRoutingBackend() *dht.IpfsDHT }); ok {
-			startDiscovery(ctx, h, dht.GetRoutingBackend())
+		// Start peer discovery -- TODO: this is broken too
+		if globalDHT != nil {
+			startDiscovery(ctx, h, globalDHT)
+		} else {
+			log.Println("")
 		}
 	}
 
