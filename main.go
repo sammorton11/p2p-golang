@@ -9,6 +9,7 @@ import (
 	"fmt"
 	"log"
 	mrand "math/rand"
+	"net"
 	"net/http"
 	_ "net/http/pprof"
 	"os"
@@ -30,21 +31,12 @@ import (
 	"github.com/multiformats/go-multiaddr"
 )
 
-/*
-TODO:
-    This check is failing all over:
-
-        if dht, ok := h.Network().(interface{ GetRoutingBackend() *dht.IpfsDHT }); ok {
-
-*/
-
 // Constants
 const (
-	DiscoveryNamespace = "/blockchain/1.0.0"
+	DiscoveryNamespace = "/blockchain/1.0.0" // topic for gossip stuff
 	BootstrapPort      = 6666
 	DiscoveryInterval  = 3 * time.Second
 	ConnTimeout        = 30 * time.Second
-	BOOTSTRAP_ADDRESS  = "/ip4/127.0.0.1/tcp/6666/p2p/12D3KooWRycpQeKrLnU9k7fLnqG9XH33zdytbXqUjuAN2MwHy2Yp"
 )
 
 // Blockchain types
@@ -77,9 +69,30 @@ const (
 	BOOTSTRAP_ID  = "12D3KooWRycpQeKrLnU9k7fLnqG9XH33zdytbXqUjuAN2MwHy2Yp"
 )
 
+// Get IP address from machine for Bootstrap node
+func getIP() string {
+	addrs, err := net.InterfaceAddrs()
+	if err != nil {
+		log.Println(err.Error())
+	}
+
+	for _, addr := range addrs {
+		if ipnet, ok := addr.(*net.IPNet); ok && !ipnet.IP.IsLoopback() {
+			if ipnet.IP.To4() != nil {
+				return ipnet.IP.String()
+			}
+		}
+	}
+	return "127.0.0.1"
+}
+
 func init() {
 	var err error
-	BootstrapMultiaddr, err = multiaddr.NewMultiaddr(fmt.Sprintf("/ip4/127.0.0.1/tcp/6666/p2p/%s", BOOTSTRAP_ID))
+	//BootstrapMultiaddr, err = multiaddr.NewMultiaddr(fmt.Sprintf("/ip4/127.0.0.1/tcp/6666/p2p/%s", BOOTSTRAP_ID))
+    ip := getIP()
+    log.Println(ip)
+
+	BootstrapMultiaddr, err = multiaddr.NewMultiaddr(fmt.Sprintf("/ip4/%s/tcp/6666/p2p/%s", ip, BOOTSTRAP_ID))
 	if err != nil {
 		log.Fatal("Failed to create bootstrap multiaddr:", err)
 	}
@@ -211,12 +224,11 @@ func getBootstrapKey() (crypto.PrivKey, error) {
 	return crypto.UnmarshalPrivateKey(privKeyBytes)
 }
 
-
 // Simulation functions
 func simulateTransactions() {
 	go func() {
 		for {
-            // Create a tx every 30 seconds
+			// Create a tx every 30 seconds
 			time.Sleep(30 * time.Second)
 			tx := Transaction{
 				Sender:        mrand.Intn(10000),
@@ -254,45 +266,45 @@ func mustMarshal(v interface{}) []byte {
 }
 
 func simulateBlocks(mutex *sync.Mutex) {
-    go func() {
-        for {
-            time.Sleep(10 * time.Second)
-            mutex.Lock()
-            prevBlock := Blockchain[len(Blockchain)-1]
+	go func() {
+		for {
+			time.Sleep(10 * time.Second)
+			mutex.Lock()
+			prevBlock := Blockchain[len(Blockchain)-1]
 
-            // Get pending transactions
-            transactions.Lock.Lock()
-            pendingTx := transactions.Data
-            transactions.Data = []Transaction{} // Clear the pool
-            transactions.Lock.Unlock()
+			// Get pending transactions
+			transactions.Lock.Lock()
+			pendingTx := transactions.Data
+			//transactions.Data = []Transaction{} // Clear the pool
+			transactions.Lock.Unlock()
 
-            newBlock := NewBlock(
-                prevBlock.Index+1,
-                prevBlock.Hash,
-                pendingTx,  // Add pending transactions
-                "",
-                []string{},
-                []string{},
-                fmt.Sprintf("miner-%s", NodeID),
-            )
+			newBlock := NewBlock(
+				prevBlock.Index+1,
+				prevBlock.Hash,
+				pendingTx, // Add pending transactions
+				"",
+				[]string{},
+				[]string{},
+				fmt.Sprintf("miner-%s", NodeID),
+			)
 
-            newBlock.Hash = newBlock.CalculateHash() // Set the hash!
+			newBlock.Hash = newBlock.CalculateHash() // Set the hash!
 
-            if isBlockValid(newBlock, prevBlock) {
-                Blockchain = append(Blockchain, newBlock)
-                
-                // Broadcast via PubSub
-                msg := NetworkMessage{
-                    Type: "blockchain",
-                    Data: mustMarshal(Blockchain),
-                }
-                if err := globalTopic.Publish(context.Background(), mustMarshal(msg)); err != nil {
-                    log.Printf("Failed to publish chain: %v", err)
-                }
-            }
-            mutex.Unlock()
-        }
-    }()
+			if isBlockValid(newBlock, prevBlock) {
+				Blockchain = append(Blockchain, newBlock)
+
+				// Broadcast via PubSub
+				msg := NetworkMessage{
+					Type: "blockchain",
+					Data: mustMarshal(Blockchain),
+				}
+				if err := globalTopic.Publish(context.Background(), mustMarshal(msg)); err != nil {
+					log.Printf("Failed to publish chain: %v", err)
+				}
+			}
+			mutex.Unlock()
+		}
+	}()
 }
 
 func isBlockValid(newBlock, oldBlock Block) bool {
@@ -369,7 +381,7 @@ func commandLineInterface(h host.Host) {
 func main() {
 	initFakeChain()
 	simulateTransactions()
-    simulateBlocks(mutex)
+	simulateBlocks(mutex)
 
 	// Enable pprof for debugging
 	go func() {
