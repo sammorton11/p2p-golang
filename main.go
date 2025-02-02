@@ -31,12 +31,20 @@ import (
 	"github.com/multiformats/go-multiaddr"
 )
 
+/*
+TODO:
+    - Bootstrap IP will come from hosting service in prod
+    - Can use ngrok to sub this for testing? i guess? idk.
+    - Replace BOOTSTRAP IP with your machines IP for two machines to connect
+*/
+
 // Constants
 const (
-	DiscoveryNamespace = "/blockchain/1.0.0" // topic for gossip stuff
+	DiscoveryNamespace = "/blockchain/1.0.0"
 	BootstrapPort      = 6666
 	DiscoveryInterval  = 3 * time.Second
 	ConnTimeout        = 30 * time.Second
+	BOOTSTRAP_IP       = "127.0.0.1"
 )
 
 // Blockchain types
@@ -89,8 +97,8 @@ func getIP() string {
 func init() {
 	var err error
 	//BootstrapMultiaddr, err = multiaddr.NewMultiaddr(fmt.Sprintf("/ip4/127.0.0.1/tcp/6666/p2p/%s", BOOTSTRAP_ID))
-    ip := getIP()
-    log.Println(ip)
+	ip := BOOTSTRAP_IP
+	log.Println(ip)
 
 	BootstrapMultiaddr, err = multiaddr.NewMultiaddr(fmt.Sprintf("/ip4/%s/tcp/6666/p2p/%s", ip, BOOTSTRAP_ID))
 	if err != nil {
