@@ -17,14 +17,11 @@ import (
 	"sync"
 	"time"
 
-	"github.com/davecgh/go-spew/spew"
-
 	"github.com/libp2p/go-libp2p"
 	dht "github.com/libp2p/go-libp2p-kad-dht"
 	pubsub "github.com/libp2p/go-libp2p-pubsub"
 	"github.com/libp2p/go-libp2p/core/crypto"
 	"github.com/libp2p/go-libp2p/core/host"
-	"github.com/libp2p/go-libp2p/core/network"
 	"github.com/libp2p/go-libp2p/core/peer"
 	"github.com/libp2p/go-libp2p/core/routing"
 	drouting "github.com/libp2p/go-libp2p/p2p/discovery/routing"
@@ -56,6 +53,11 @@ type Transactions struct {
 	Data []Transaction
 }
 
+type NetworkMessage struct {
+	Type string          `json:"type"`
+	Data json.RawMessage `json:"data"`
+}
+
 // Global variables
 var (
 	NodeID             = fmt.Sprintf("Node-%d", mrand.Intn(1000)) // giving each Transaction a unique ID to help with tracking - just for testing purposes
@@ -65,7 +67,9 @@ var (
 	transactions       = &Transactions{
 		Data: []Transaction{},
 	}
-    globalDHT *dht.IpfsDHT
+	globalDHT   *dht.IpfsDHT
+	globalTopic *pubsub.Topic
+	globalSub   *pubsub.Subscription
 )
 
 const (
@@ -109,11 +113,6 @@ func startDiscovery(ctx context.Context, h host.Host, dht *dht.IpfsDHT) {
 					log.Printf("Connection failed: %s", err)
 				} else {
 					log.Printf("Connected to peer: %s", peer.ID.String()[:12])
-					stream, err := h.NewStream(ctx, peer.ID, DiscoveryNamespace)
-					fmt.Println("HEEERRREEE BITCH")
-					if err == nil {
-						go handleStream(stream)
-					}
 				}
 				cancel()
 			}
@@ -169,7 +168,6 @@ func setupDHT(ctx context.Context, h host.Host, bootstrapNode bool) (*dht.IpfsDH
 	return kdht, nil
 }
 
-
 func makeHost(ctx context.Context, port int, bootstrapNode bool) (host.Host, error) {
 	var opts []libp2p.Option
 
@@ -182,12 +180,12 @@ func makeHost(ctx context.Context, port int, bootstrapNode bool) (host.Host, err
 		libp2p.Routing(func(h host.Host) (routing.PeerRouting, error) {
 			dht, err := setupDHT(ctx, h, bootstrapNode)
 			if err != nil {
-                log.Println("Error settin up DHT")
+				log.Println("Error settin up DHT")
 				return nil, err
 			}
 
-            // Should we just add the addresses to the dht here.. or.. idk..
-            globalDHT = dht
+			// Should we just add the addresses to the dht here.. or.. idk..
+			globalDHT = dht
 
 			return dht, nil
 		}),
@@ -213,86 +211,13 @@ func getBootstrapKey() (crypto.PrivKey, error) {
 	return crypto.UnmarshalPrivateKey(privKeyBytes)
 }
 
-// Stream handling
-func handleStream(s network.Stream) {
-	log.Printf("HEEELLLOOOOO")
-	log.Printf("\n[👥] New peer connected: %s\n", s.Conn().RemotePeer().String()[:12])
-	rw := bufio.NewReadWriter(bufio.NewReader(s), bufio.NewWriter(s))
-
-	log.Println("SUPPOSED TO BE READING DATA...")
-	go readData(rw, s.Conn().RemotePeer().String()[:12])
-
-	log.Println("SUPPOSED TO BE WRITING DATA...")
-	go writeData(rw, s.Conn().RemotePeer().String()[:12])
-}
-
-func readData(rw *bufio.ReadWriter, peerID string) {
-	for {
-		str, err := rw.ReadString('\n')
-		if err != nil {
-			log.Printf("[❌] Error reading from peer %s: %v\n", peerID, err)
-			return
-		}
-
-		if str == "" || str == "\n" {
-			continue
-		}
-
-		chain := make([]Block, 0)
-		if err := json.Unmarshal([]byte(str), &chain); err != nil {
-			log.Printf("[❌] Error parsing blockchain from peer %s: %v\n", peerID, err)
-			continue
-		}
-
-		mutex.Lock()
-		if len(chain) > len(Blockchain) {
-			log.Printf("\n[📥] Received longer blockchain from peer %s", peerID)
-			Blockchain = chain
-			bytes, _ := json.MarshalIndent(Blockchain, "", "  ")
-			fmt.Printf("\n[🔗] Updated Blockchain:\n%s\n\n> ", string(bytes))
-		}
-		mutex.Unlock()
-	}
-}
-
-func writeData(rw *bufio.ReadWriter, peerID string) {
-	log.Println("Supposed to be simulating blocks...")
-	simulateBlocks(mutex, rw, peerID)
-
-	go func() {
-		for {
-			time.Sleep(5 * time.Second)
-			mutex.Lock()
-			bytes, err := json.Marshal(Blockchain)
-			if err != nil {
-				log.Printf("[❌] Error marshaling blockchain: %v\n", err)
-				mutex.Unlock()
-				continue
-			}
-
-			_, err = rw.WriteString(fmt.Sprintf("%s\n", string(bytes)))
-			if err != nil {
-				log.Printf("[❌] Error writing to peer %s: %v\n", peerID, err)
-				mutex.Unlock()
-				continue
-			}
-
-			err = rw.Flush()
-			if err != nil {
-				log.Printf("[❌] Error flushing to peer %s: %v\n", peerID, err)
-				mutex.Unlock()
-				continue
-			}
-			mutex.Unlock()
-		}
-	}()
-}
 
 // Simulation functions
 func simulateTransactions() {
 	go func() {
 		for {
-			time.Sleep(5 * time.Second)
+            // Create a tx every 30 seconds
+			time.Sleep(30 * time.Second)
 			tx := Transaction{
 				Sender:        mrand.Intn(10000),
 				Recipient:     fmt.Sprintf("Recipient %d", mrand.Intn(10000)),
@@ -304,57 +229,70 @@ func simulateTransactions() {
 			}
 
 			transactions.Lock.Lock()
-
-			//log.Printf("\n[💫] %s created transaction: Amount=%d, Signature=%s\n", NodeID, tx.Amount, tx.Signature)
 			transactions.Data = append(transactions.Data, tx)
-
 			transactions.Lock.Unlock()
+
+			msg := NetworkMessage{
+				Type: "transaction",
+				Data: mustMarshal(tx),
+			}
+
+			if err := globalTopic.Publish(context.Background(), mustMarshal(msg)); err != nil {
+				log.Printf("Failed to publish tx: %v", err)
+			}
 		}
 	}()
 }
 
-func simulateBlocks(mutex *sync.Mutex, rw *bufio.ReadWriter, peerID string) {
-	log.Println("In the func of simulate blocks")
+func mustMarshal(v interface{}) []byte {
+	b, err := json.Marshal(v)
+	if err != nil {
+		panic(err)
+	}
 
-	go func() {
-		log.Println("In the GO func of simulate blocks")
-		for {
-			time.Sleep(2 * time.Second)
-			mutex.Lock()
-			prevBlock := Blockchain[len(Blockchain)-1]
-			newBlock := NewBlock(
-				prevBlock.Index+1,
-				prevBlock.Hash,
-				[]Transaction{},
-				"",
-				[]string{},
-				[]string{},
-				fmt.Sprintf("miner-%s", NodeID),
-			)
+	return b
+}
 
-			if isBlockValid(newBlock, prevBlock) {
-				Blockchain = append(Blockchain, newBlock)
-				log.Printf("\n[✨] Created new block: %d\n", newBlock.Index)
-				spew.Printf("[📦] Block details:\n%+v\n\n", newBlock)
-				mutex.Unlock()
-			}
+func simulateBlocks(mutex *sync.Mutex) {
+    go func() {
+        for {
+            time.Sleep(10 * time.Second)
+            mutex.Lock()
+            prevBlock := Blockchain[len(Blockchain)-1]
 
-			bytes, err := json.Marshal(Blockchain)
-			if err != nil {
-				log.Printf("[❌] Error marshaling blockchain: %v\n", err)
-				mutex.Unlock()
-				continue
-			}
+            // Get pending transactions
+            transactions.Lock.Lock()
+            pendingTx := transactions.Data
+            transactions.Data = []Transaction{} // Clear the pool
+            transactions.Lock.Unlock()
 
-			_, err = rw.WriteString(fmt.Sprintf("%s\n", string(bytes)))
-			if err != nil {
-				log.Printf("[❌] Error broadcasting to peer %s: %v\n", peerID, err)
-				mutex.Unlock()
-				continue
-			}
-			mutex.Unlock()
-		}
-	}()
+            newBlock := NewBlock(
+                prevBlock.Index+1,
+                prevBlock.Hash,
+                pendingTx,  // Add pending transactions
+                "",
+                []string{},
+                []string{},
+                fmt.Sprintf("miner-%s", NodeID),
+            )
+
+            newBlock.Hash = newBlock.CalculateHash() // Set the hash!
+
+            if isBlockValid(newBlock, prevBlock) {
+                Blockchain = append(Blockchain, newBlock)
+                
+                // Broadcast via PubSub
+                msg := NetworkMessage{
+                    Type: "blockchain",
+                    Data: mustMarshal(Blockchain),
+                }
+                if err := globalTopic.Publish(context.Background(), mustMarshal(msg)); err != nil {
+                    log.Printf("Failed to publish chain: %v", err)
+                }
+            }
+            mutex.Unlock()
+        }
+    }()
 }
 
 func isBlockValid(newBlock, oldBlock Block) bool {
@@ -429,6 +367,10 @@ func commandLineInterface(h host.Host) {
 }
 
 func main() {
+	initFakeChain()
+	simulateTransactions()
+    simulateBlocks(mutex)
+
 	// Enable pprof for debugging
 	go func() {
 		log.Println(http.ListenAndServe("localhost:6061", nil))
@@ -452,8 +394,6 @@ func main() {
 	}
 
 	// Initialize blockchain and start transaction simulator
-	initFakeChain()
-	simulateTransactions()
 
 	// Create libp2p host
 	h, err := makeHost(ctx, *port, *isBootstrap)
@@ -462,7 +402,7 @@ func main() {
 	}
 
 	// Set up pubsub
-	/* ps, err := setupPubSub(h)
+	ps, err := setupPubSub(h)
 	if err != nil {
 		log.Fatal("[❌] Failed to setup pubsub:", err)
 	}
@@ -473,39 +413,53 @@ func main() {
 		log.Fatal("[❌] Failed to join topic:", err)
 	}
 
+	globalTopic = topic
 	sub, err := topic.Subscribe()
 	if err != nil {
 		log.Fatal("[❌] Failed to subscribe:", err)
 	}
-
-	// Start periodic node availability announcements
-	go func() {
-		for {
-			//msg := fmt.Sprintf("node-available:%s", h.ID())
-			if err := topic.Publish(ctx, []byte(msg)); err != nil {
-				log.Printf("[⚠️] Failed to publish availability: %s", err)
-			}
-			time.Sleep(DiscoveryInterval)
-		}
-	}()
+	globalSub = sub
 
 	// Set up message listener
 	go func() {
 		for {
-			msg, err := sub.Next(ctx)
+			msg, err := globalSub.Next(ctx)
 			if err != nil {
 				log.Printf("[⚠️] Subscription error: %s", err)
 				continue
 			}
 			if msg.ReceivedFrom == h.ID() {
-				continue // Skip own messages
+				continue
 			}
-			log.Printf("[📨] Received: %s from %s", string(msg.Data), msg.ReceivedFrom.String()[:12])
-		}
-	}() */
 
-	// Set protocol handler
-	h.SetStreamHandler(DiscoveryNamespace, handleStream)
+			var netMsg NetworkMessage
+			if err := json.Unmarshal(msg.Data, &netMsg); err != nil {
+				continue
+			}
+
+			switch netMsg.Type {
+			case "transaction":
+				var tx Transaction
+				if err := json.Unmarshal(netMsg.Data, &tx); err != nil {
+					continue
+				}
+				transactions.Lock.Lock()
+				transactions.Data = append(transactions.Data, tx)
+				transactions.Lock.Unlock()
+
+			case "blockchain":
+				var chain []Block
+				if err := json.Unmarshal(netMsg.Data, &chain); err != nil {
+					continue
+				}
+				mutex.Lock()
+				if len(chain) > len(Blockchain) {
+					Blockchain = chain
+				}
+				mutex.Unlock()
+			}
+		}
+	}()
 
 	// Print node information
 	for _, addr := range h.Addrs() {
@@ -516,9 +470,7 @@ func main() {
 	// Bootstrap node setup
 	if *isBootstrap {
 		log.Printf("[📡] Running as bootstrap node on port %d", *port)
-		// Get the DHT from the host's network
-
-		//TODO: this is broken -- there is probably a different way to get the dht so we can add stuff to it?... right?? idk.
+		// If DHT is not nil - set up the routing discovery using the dht
 		if globalDHT != nil {
 			routingDiscovery := drouting.NewRoutingDiscovery(globalDHT)
 			dutil.Advertise(ctx, routingDiscovery, DiscoveryNamespace)
@@ -544,7 +496,6 @@ func main() {
 			}
 		}
 
-		// Start peer discovery -- TODO: this is broken too
 		if globalDHT != nil {
 			startDiscovery(ctx, h, globalDHT)
 		} else {

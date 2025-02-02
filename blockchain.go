@@ -142,6 +142,6 @@ func (t Transaction) String() string {
 
 // String representation of Block
 func (b Block) String() string {
-	return fmt.Sprintf("Index: %d\nPrevHash: %s\nTimestamp: %d\nTransactions: %v\nSignature: %s\nNextMiner: %s",
+	return fmt.Sprintf("Index: %d\nPrevHash: %s\nHash: %s\nTimestamp: %d\nTransactions: %v\nSignature: %s\nNextMiner: %s",
 		b.Index, b.PreviousHash, b.Hash, b.Timestamp, b.Transactions, b.Signature, b.NextMiner)
 }
