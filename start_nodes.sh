@@ -23,11 +23,14 @@ kill $(lsof -t -i:6666) 2>/dev/null
 kill $(lsof -t -i:6667) 2>/dev/null
 kill $(lsof -t -i:6668) 2>/dev/null
 
-# Start each node in a new terminal window
 $TERM_CMD "$(pwd)" $EXEC_CMD bash -c "go run main.go blockchain.go -p 6666 -bootstrap" &
 sleep 2
 $TERM_CMD "$(pwd)" $EXEC_CMD bash -c "go run main.go blockchain.go -p 6667" &
 sleep 1
 $TERM_CMD "$(pwd)" $EXEC_CMD bash -c "go run main.go blockchain.go -p 6668" &
+
+# Profiling
+$TERM_CMD "$(pwd)" $EXEC_CMD bash -c "go tool pprof -http=:8080 'http://localhost:6069/debug/pprof/heap'" & # Start each node in a new terminal window
+
 
 echo "All nodes started in separate terminals!"

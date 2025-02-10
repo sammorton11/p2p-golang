@@ -10,26 +10,26 @@ import (
 
 // Transaction represents a single transaction in the blockchain
 type Transaction struct {
-	Sender        int
-	Recipient     string
-	Signature     string
-	Amount        int
-	Properties    string
-	Computational string
-	Nonce         int
+	Sender        int    `json:"sender"`
+	Recipient     string `json:"recipient"`
+	Signature     string `json:"signature"`
+	Amount        int    `json:"amount"`
+	Properties    string `json:"properties"`
+	Computational string `json:"computational"`
+	Nonce         int    `json:"nonce"`
 }
 
 // Block represents a block in the blockchain
 type Block struct {
-	Index        int
-	PreviousHash string
-	Hash         string
-	Timestamp    int64 // Using Unix timestamp
-	Transactions []Transaction
-	Signature    string
-	MerkleRoot   []string
-	NewKeys      []string
-	NextMiner    string
+	Index        int           `json:"index"`
+	PreviousHash string        `json:"previous_hash"`
+	Hash         string        `json:"hash"`
+	Timestamp    int64         `json:"timestamp"`
+	Transactions []Transaction `json:"transactions"`
+	Signature    string        `json:"signature"`
+	MerkleRoot   []string      `json:"merkle_root"`
+	NewKeys      []string      `json:"new_keys"`
+	NextMiner    string        `json:"next_miner"`
 }
 
 // Methods for Transaction
@@ -76,6 +76,40 @@ func NewBlock(index int, previousHash string, transactions []Transaction,
 	}
 }
 
+func (b *Block) CalculateHash() string {
+	record := fmt.Sprintf("%d%s%d%v%s%v%v%s",
+		b.Index,
+		b.PreviousHash,
+		b.Timestamp,
+		b.Transactions,
+		b.Signature,
+		b.MerkleRoot,
+		b.NewKeys,
+		b.NextMiner)
+	h := sha256.New()
+	h.Write([]byte(record))
+	hashed := h.Sum(nil)
+	return hex.EncodeToString(hashed)
+}
+
+func (b *Block) VerifySignature() bool {
+	// Implement signature verification logic
+	// This would typically involve public key cryptography
+	return true // Placeholder
+}
+
+// String representation of Transaction
+func (t Transaction) String() string {
+	return fmt.Sprintf("Sender: %d, Recipient: %s, Amount: %d, Nonce: %d",
+		t.Sender, t.Recipient, t.Amount, t.Nonce)
+}
+
+// String representation of Block
+func (b Block) String() string {
+	return fmt.Sprintf("Index: %d\nPrevHash: %s\nHash: %s\nTimestamp: %d\nTransactions: %v\nSignature: %s\nNextMiner: %s",
+		b.Index, b.PreviousHash, b.Hash, b.Timestamp, b.Transactions, b.Signature, b.NextMiner)
+}
+
 func (b *Block) GetIndex() int {
 	return b.Index
 }
@@ -110,38 +144,4 @@ func (b *Block) GetNextMiner() string {
 
 func (b *Block) AddTransaction(transaction Transaction) {
 	b.Transactions = append(b.Transactions, transaction)
-}
-
-func (b *Block) CalculateHash() string {
-	record := fmt.Sprintf("%d%s%d%v%s%v%v%s",
-		b.Index,
-		b.PreviousHash,
-		b.Timestamp,
-		b.Transactions,
-		b.Signature,
-		b.MerkleRoot,
-		b.NewKeys,
-		b.NextMiner)
-	h := sha256.New()
-	h.Write([]byte(record))
-	hashed := h.Sum(nil)
-	return hex.EncodeToString(hashed)
-}
-
-func (b *Block) VerifySignature() bool {
-	// Implement signature verification logic
-	// This would typically involve public key cryptography
-	return true // Placeholder
-}
-
-// String representation of Transaction
-func (t Transaction) String() string {
-	return fmt.Sprintf("Sender: %d, Recipient: %s, Amount: %d, Nonce: %d",
-		t.Sender, t.Recipient, t.Amount, t.Nonce)
-}
-
-// String representation of Block
-func (b Block) String() string {
-	return fmt.Sprintf("Index: %d\nPrevHash: %s\nHash: %s\nTimestamp: %d\nTransactions: %v\nSignature: %s\nNextMiner: %s",
-		b.Index, b.PreviousHash, b.Hash, b.Timestamp, b.Transactions, b.Signature, b.NextMiner)
 }
