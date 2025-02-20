@@ -1,0 +1,98 @@
+flowchart TD
+    %% Main Program Flow
+    Start[Program Start] --> ParseFlags{Parse Flags}
+    ParseFlags --> |"-p port"| PortCheck{Check Port}
+    ParseFlags --> |"-bootstrap"| IsBootstrap{Is Bootstrap?}
+    
+    PortCheck --> |"port = 0"| Fatal[Fatal: Provide Port]
+    PortCheck --> |"port != 0"| InitChain
+    
+    IsBootstrap --> |"Yes"| CheckBootPort{Check Bootstrap Port}
+    CheckBootPort --> |"port != 6666"| Fatal2[Fatal: Wrong Bootstrap Port]
+    CheckBootPort --> |"port = 6666"| InitChain
+    IsBootstrap --> |"No"| InitChain
+    
+    InitChain[Initialize Fake Chain] --> SimulateTx[Start Transaction Simulation]
+    SimulateTx --> SimulateBlocks[Start Block Simulation]
+    SimulateBlocks --> CreateHost[Create LibP2P Host]
+    
+    %% Host Creation
+    subgraph HostCreation[Host Creation Process]
+        CreateHost --> SetupDHT[Setup DHT]
+        SetupDHT --> |"Bootstrap Node"| ServerMode[DHT Server Mode]
+        SetupDHT --> |"Peer Node"| ClientMode[DHT Client Mode]
+        ServerMode & ClientMode --> SetupPubSub[Setup PubSub]
+        SetupPubSub --> JoinTopic[Join Blockchain Topic]
+        JoinTopic --> StartListener[Start Message Listener]
+    end
+    
+    %% Node Type Specific Setup
+    StartListener --> NodeType{Node Type?}
+    NodeType --> |"Bootstrap"| SetupBootstrap[Setup Bootstrap Node]
+    NodeType --> |"Full Node"| SetupFullNode[Setup Full Node]
+    
+    subgraph BootstrapSetup[Bootstrap Node Setup]
+        SetupBootstrap --> AdvertiseDHT[Advertise on DHT]
+        AdvertiseDHT --> StartCLI[Start CLI Interface]
+    end
+    
+    subgraph FullNodeSetup[Full Node Setup]
+        SetupFullNode --> ConnectBootstrap[Connect to Bootstrap]
+        ConnectBootstrap --> StartDiscovery[Start DHT Discovery]
+        StartDiscovery --> StartAPI[Start API Server]
+        StartAPI --> StartCLI
+    end
+    
+    %% Simulation Processes
+    subgraph TxSimulation[Transaction Simulation Loop]
+        SimLoop1[["Every 10s"]] --> CreateTx[Create Transaction]
+        CreateTx --> AddToPool[Add to Mempool]
+        AddToPool --> PublishTx[Publish to Network]
+        PublishTx --> SimLoop1
+    end
+    
+    subgraph BlockSimulation[Block Creation Loop]
+        SimLoop2[["Every 10s"]] --> GetPending[Get Pending Tx]
+        GetPending --> CreateBlock[Create New Block]
+        CreateBlock --> ValidateBlock{Validate Block}
+        ValidateBlock --> |"Valid"| AddToChain[Add to Blockchain]
+        ValidateBlock --> |"Invalid"| SimLoop2
+        AddToChain --> PublishChain[Publish to Network]
+        PublishChain --> SimLoop2
+    end
+    
+    %% Message Handling
+    subgraph MessageHandling[Message Listener Process]
+        MsgLoop[["Continuous"]] --> WaitMsg[Wait for Message]
+        WaitMsg --> ParseMsg{Parse Message Type}
+        ParseMsg --> |"Transaction"| HandleTx[Add to Mempool]
+        ParseMsg --> |"Blockchain"| HandleChain[Update Chain if Longer]
+        HandleTx & HandleChain --> MsgLoop
+    end
+    
+    %% CLI Interface
+    subgraph CLIInterface[CLI Command Interface]
+        Command{Command Type} --> |"chain"| ShowChain[Display Blockchain]
+        Command --> |"peers"| ShowPeers[Display Connected Peers]
+        Command --> |"tx"| ShowTx[Display Pending Transactions]
+        Command --> |"help"| ShowHelp[Display Help]
+        Command --> |"api"| ShowAPI[Display API Port]
+        Command --> |"stats"| ShowStats[Display IO Stats]
+    end
+    
+    %% API Server
+    subgraph APIServer[API Server Endpoints]
+        Endpoint{Endpoint} --> |"/tx"| ServeTx[Serve Mempool]
+        Endpoint --> |"/blockchain"| ServeChain[Serve Latest Block]
+    end
+
+    %% Styling
+    classDef process fill:#e1f5fe,stroke:#01579b;
+    classDef decision fill:#fff3e0,stroke:#e65100;
+    classDef fatal fill:#ffebee,stroke:#c62828;
+    classDef loop fill:#f3e5f5,stroke:#4a148c;
+    
+    class Start,InitChain,CreateHost,SetupDHT,SetupPubSub,JoinTopic,StartListener process;
+    class ParseFlags,PortCheck,IsBootstrap,CheckBootPort,NodeType,ValidateBlock,ParseMsg,Command,Endpoint decision;
+    class Fatal,Fatal2 fatal;
+    class SimLoop1,SimLoop2,MsgLoop loop;

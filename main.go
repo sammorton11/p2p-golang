@@ -218,7 +218,7 @@ func makeHost(ctx context.Context, port int, bootstrapNode bool, node *Node) (ho
 
 	// Base options
 	opts = []libp2p.Option{
-		libp2p.ListenAddrStrings(fmt.Sprintf("/ip4/0.0.0.0/tcp/%d", port)),
+		libp2p.ListenAddrStrings(fmt.Sprintf("/ip4/0.0.0.0/tcp/%d", port)), // other nodes can connect to this one if they know this address
 		libp2p.Security(noise.ID, noise.New),
 		libp2p.EnableNATService(),   // Enable this so we can hole punch
 		libp2p.EnableHolePunching(), // NAT traversal so we can connect using the DHT
@@ -250,7 +250,7 @@ func makeHost(ctx context.Context, port int, bootstrapNode bool, node *Node) (ho
 		for {
 			stats := bw.GetBandwidthTotals()
             node.metrics = stats
-		//	log.Printf("[📊] Node %d - In: %d bytes, Out: %d bytes", port, stats.TotalIn, stats.TotalOut)
+		    //	log.Printf("[📊] Node %d - In: %d bytes, Out: %d bytes", port, stats.TotalIn, stats.TotalOut)
 			time.Sleep(time.Second * 5)
 		}
 	}()
@@ -288,17 +288,17 @@ func simulateTransactions(node *Node) {
 
 			msg := NetworkMessage{
 				Type: "transaction",
-				Data: mustMarshal(tx),
+				Data: marshal(tx),
 			}
 
-			if err := node.topic.Publish(context.Background(), mustMarshal(msg)); err != nil {
+			if err := node.topic.Publish(context.Background(), marshal(msg)); err != nil {
 				log.Printf("Failed to publish tx: %v", err)
 			}
 		}
 	}()
 }
 
-func mustMarshal(v interface{}) []byte {
+func marshal(v interface{}) []byte {
 	b, err := json.Marshal(v)
 	if err != nil {
 		panic(err)
@@ -338,9 +338,9 @@ func simulateBlocks(mutex *sync.Mutex, node *Node) {
 				// Broadcast to network using gossip
 				msg := NetworkMessage{
 					Type: "blockchain",
-					Data: mustMarshal(Blockchain),
+					Data: marshal(Blockchain),
 				}
-				if err := node.topic.Publish(context.Background(), mustMarshal(msg)); err != nil {
+				if err := node.topic.Publish(context.Background(), marshal(msg)); err != nil {
 					log.Printf("Failed to publish chain: %v", err)
 				}
 			}
@@ -460,6 +460,7 @@ func runFullNode(ctx context.Context, node *Node, port *int) {
 			log.Printf("[✅] Connected to bootstrap node")
 		}
 	}
+
 	if node.dht != nil {
 		startDHTDiscovery(ctx, node.host, node.dht)
 	} else {
@@ -557,7 +558,7 @@ func apiServer() {
 	}
 
 	addr := listener.Addr().(*net.TCPAddr)
-	apiPort := addr.Port
+	apiPort = addr.Port
 
 	go func() {
 		portStr := fmt.Sprintf(":%d", apiPort)
